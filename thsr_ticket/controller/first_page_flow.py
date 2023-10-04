@@ -3,6 +3,7 @@ import json
 from PIL import Image
 from typing import Tuple
 from datetime import date, timedelta
+from pydantic import ValidationError
 
 from bs4 import BeautifulSoup
 from requests.models import Response
@@ -25,23 +26,31 @@ class FirstPageFlow:
         self.record = record
 
     def run(self) -> Tuple[Response, BookingModel]:
+        # import pdb; pdb.set_trace()
         # First page. Booking options
         print('請稍等...')
         book_page = self.client.request_booking_page().content
         img_resp = self.client.request_security_code_img(book_page).content
         page = BeautifulSoup(book_page, features='html.parser')
+        
+        book_model_input = {
+            'selectStartStation': self.select_station('啟程'),
+            'selectDestinationStation': self.select_station('到達', default_value=StationMapping.Zuouing.value),
+            'toTimeInputField': self.select_date('出發'),
+            'toTimeTable': self.select_time('啟程'),
+            'ticketPanel:rows:0:ticketAmount': self.select_ticket_num(TicketType.ADULT),
+            'seatCon:seatRadioGroup': _parse_seat_prefer_value(page),
+            'tripCon:typesoftrip': _parse_types_of_trip_value(page),
+            'bookingMethod': _parse_search_by(page),
+            'homeCaptcha:securityCode': _input_security_code(img_resp),
+        }
+        print("Creating BookingModel with parameters:", book_model_input)
 
-        book_model = BookingModel(
-            start_station=self.select_station('啟程'),
-            dest_station=self.select_station('到達', default_value=StationMapping.Zuouing.value),
-            outbound_date=self.select_date('出發'),
-            outbound_time=self.select_time('啟程'),
-            adult_ticket_num=self.select_ticket_num(TicketType.ADULT),
-            seat_prefer=_parse_seat_prefer_value(page),
-            types_of_trip=_parse_types_of_trip_value(page),
-            search_by=_parse_search_by(page),
-            security_code=_input_security_code(img_resp),
-        )
+        try:
+            book_model = BookingModel.parse_obj(book_model_input)
+        except ValidationError as e:
+            print(e)
+        
         json_params = book_model.json(by_alias=True)
         dict_params = json.loads(json_params)
         resp = self.client.submit_booking_form(dict_params)
